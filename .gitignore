@@ -1,0 +1,23 @@
+node_modules/
+.env
+repos/
+
+# Web app
+web-app/node_modules/
+web-app/dist/
+web-app/.env
+
+# Laptop server
+laptop-server/node_modules/
+laptop-server/repos/
+laptop-server/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
