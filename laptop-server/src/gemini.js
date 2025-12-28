@@ -11,7 +11,7 @@ export class GeminiRunner extends EventEmitter {
 
     async execute(repoPath, prompt, onOutput = () => { }) {
         console.log(`\n\n════════════════════════════════════════════════════════════`);
-        console.log(`🤖 GEMINI CLI EXECUTION`);
+        console.log(`🤖 GEMINI CLI EXECUTION (via PowerShell)`);
         console.log(`📂 Repo:   ${repoPath}`);
         console.log(`📝 Prompt: ${prompt}`);
         console.log(`════════════════════════════════════════════════════════════\n`);
@@ -36,7 +36,7 @@ export class GeminiRunner extends EventEmitter {
         return new Promise((resolve, reject) => {
             let fullOutput = '';
 
-            // Write to temp file in the REPO directory
+            // Write to temp file
             const tempFileName = `.gemini_input_${Date.now()}.txt`;
             const tempFilePath = path.join(repoPath, tempFileName);
 
@@ -46,22 +46,12 @@ export class GeminiRunner extends EventEmitter {
                 return reject(err);
             }
 
-            const isWindows = process.platform === 'win32';
-            let cmd, args;
+            // USE POWERSHELL FOR ROBUST PIPING
+            // Get-Content "file" | gemini --yolo
+            const psCommand = `Get-Content "${tempFileName}" | gemini --yolo`;
 
-            if (isWindows) {
-                cmd = 'cmd';
-                // Using basename only because CWD is set to repoPath
-                // "gemini --yolo < filename.txt"
-                args = ['/c', `gemini --yolo < "${tempFileName}"`];
-            } else {
-                cmd = 'sh';
-                args = ['-c', `gemini --yolo < "${tempFileName}"`];
-            }
-
-            const proc = spawn(cmd, args, {
-                cwd: repoPath, // Important: Run inside the repo folder
-                shell: true,
+            const proc = spawn('powershell', ['-Command', psCommand], {
+                cwd: repoPath,
                 env: { ...process.env },
                 stdio: ['ignore', 'pipe', 'pipe']
             });
@@ -70,17 +60,27 @@ export class GeminiRunner extends EventEmitter {
 
             proc.stdout.on('data', (data) => {
                 const text = data.toString();
-                fullOutput += text;
+                fullOutput += text; // Keep for history even if we filter display
+
+                // Filter noise
+                if (text.includes('YOLO mode is enabled') || text.includes('Loaded cached credentials')) {
+                    return;
+                }
+
                 process.stdout.write(text);
                 onOutput({ type: 'stdout', text });
             });
 
             proc.stderr.on('data', (data) => {
                 const text = data.toString();
-                if (!text.includes('Loaded cached credentials')) {
+                // Strict noise filtering
+                if (!text.includes('Loaded cached credentials') &&
+                    !text.includes('YOLO mode is enabled') &&
+                    !text.includes('Passing args to a child process')) {
+
                     process.stderr.write(text);
+                    onOutput({ type: 'stderr', text });
                 }
-                onOutput({ type: 'stderr', text });
             });
 
             proc.on('close', (code) => {
@@ -109,10 +109,9 @@ export class GeminiRunner extends EventEmitter {
         });
     }
 
-    // Adaptors
     async startSession(repoPath, onOutput = () => { }) {
         if (!this.histories.has(repoPath)) this.histories.set(repoPath, []);
-        onOutput({ type: 'info', text: `Context session initialized.` });
+        onOutput({ type: 'info', text: `Session Ready.` });
         return { ready: true };
     }
 

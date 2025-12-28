@@ -82,7 +82,8 @@ function RepoDetail({ token, user, serverUrl, serverSecret }) {
         }
 
         setExecuting(true);
-        setOutput([]);
+        // Don't clear output - append the user's command to it for history visibility
+        setOutput(prev => [...prev, { type: 'stdout', text: `\n> USER: ${command}\n` }]);
         setStatus('Running Gemini CLI...');
         const currentCommand = command;
         setCommand('');
