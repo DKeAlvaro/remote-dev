@@ -118,7 +118,7 @@ const wsHandlers = {
     execute_command: async ({ owner, repo, prompt }, onProgress) => {
         const repoPath = gitManager.getRepoPath(owner, repo);
 
-        onProgress({ stage: 'starting', message: 'Starting Gemini Execution...' });
+        onProgress({ stage: 'sending', message: 'Sending to Gemini...' });
 
         try {
             // Execute and wait for full completion

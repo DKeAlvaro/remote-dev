@@ -223,11 +223,65 @@ function RepoDetail({ token, user, serverUrl, serverSecret }) {
                             <button className="btn btn-ghost btn-sm" onClick={() => setOutput([])}>Clear</button>
                         </div>
                         <div className="terminal">
-                            {output.map((line, i) => (
-                                <div key={i} className={`terminal-line terminal-${line.type}`}>
-                                    {line.text}
-                                </div>
-                            ))}
+                            {output.map((line, i) => {
+                                // Improved Markdown Formatter
+                                const formatText = (text) => {
+                                    if (!text) return null;
+
+                                    // Process line by line
+                                    return text.split('\n').map((segment, lineIdx) => {
+                                        let content = segment;
+                                        let style = {};
+
+                                        // Headers
+                                        if (content.match(/^#{1,6}\s/)) {
+                                            const level = content.match(/^(#{1,6})/)[0].length;
+                                            content = content.replace(/^#{1,6}\s/, '');
+                                            style = {
+                                                fontWeight: 'bold',
+                                                fontSize: `${1.4 - (level * 0.1)}em`,
+                                                marginTop: '0.5em',
+                                                marginBottom: '0.2em',
+                                                display: 'block'
+                                            };
+                                        }
+                                        // Lists (Bulleted)
+                                        else if (content.match(/^\s*[\-\*]\s/)) {
+                                            content = content.replace(/^\s*[\-\*]\s/, '• ');
+                                            style = { paddingLeft: '1em', display: 'block' };
+                                        }
+                                        // Lists (Numbered)
+                                        else if (content.match(/^\s*\d+\.\s/)) {
+                                            // Keep the number
+                                            style = { paddingLeft: '1em', display: 'block' };
+                                        }
+
+                                        // Inline Formatting
+                                        // Bold
+                                        content = content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+                                        // Italic
+                                        content = content.replace(/\*([^\s].*?)\*/g, '<em>$1</em>'); // distinct from list bullet
+                                        // Inline Code
+                                        content = content.replace(/(`)(.*?)\1/g, '<code style="background:rgba(255,255,255,0.1); padding:2px 4px; border-radius:3px;">$2</code>');
+                                        // Links
+                                        content = content.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color:#58a6ff; text-decoration:underline;">$1</a>');
+
+                                        return (
+                                            <div
+                                                key={lineIdx}
+                                                style={style}
+                                                dangerouslySetInnerHTML={{ __html: content || '&nbsp;' }}
+                                            />
+                                        );
+                                    });
+                                };
+
+                                return (
+                                    <div key={i} className={`terminal-line terminal-${line.type}`}>
+                                        {formatText(line.text)}
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 )}
