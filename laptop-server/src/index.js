@@ -75,12 +75,26 @@ const server = http.createServer(app);
 // WebSocket message handlers
 const wsHandlers = {
     /**
-     * Clone or pull a repository
+     * Clone or pull a repository and start Gemini session
      */
     clone_repo: async ({ owner, repo }, onProgress) => {
         onProgress({ stage: 'cloning', message: `Cloning ${owner}/${repo}...` });
         const result = await gitManager.cloneOrPull(owner, repo, config.githubToken);
-        onProgress({ stage: 'done', message: `Repository ${result.action}` });
+        onProgress({ stage: 'cloned', message: `Repository ${result.action}` });
+
+        // Start Gemini CLI session immediately (pre-warm)
+        const repoPath = gitManager.getRepoPath(owner, repo);
+        onProgress({ stage: 'starting_gemini', message: 'Starting Gemini CLI (this may take a moment)...' });
+
+        try {
+            await geminiRunner.startSession(repoPath, (output) => {
+                onProgress({ stage: 'gemini_output', ...output });
+            });
+            onProgress({ stage: 'ready', message: 'Gemini CLI ready! You can now send commands.' });
+        } catch (err) {
+            onProgress({ stage: 'gemini_error', message: `Gemini CLI error: ${err.message}` });
+        }
+
         return result;
     },
 
@@ -104,34 +118,45 @@ const wsHandlers = {
     execute_command: async ({ owner, repo, prompt }, onProgress) => {
         const repoPath = gitManager.getRepoPath(owner, repo);
 
-        onProgress({ stage: 'starting', message: 'Starting Gemini CLI...' });
+        onProgress({ stage: 'starting', message: 'Starting Gemini Execution...' });
 
-        // Execute Gemini
-        const execResult = await geminiRunner.execute(repoPath, prompt, (output) => {
-            onProgress({ stage: 'running', ...output });
-        });
+        try {
+            // Execute and wait for full completion
+            // sendPrompt now wraps execute() which returns a Promise that resolves when the process exits
+            const result = await geminiRunner.sendPrompt(repoPath, prompt, (output) => {
+                onProgress({ stage: 'running', ...output });
+            });
 
-        if (!execResult.success) {
-            return { success: false, error: execResult.error || 'Gemini CLI failed' };
+            if (result.success) {
+                onProgress({ stage: 'done', message: 'Execution finished. Ready to commit.' });
+                return { success: true, message: 'Gemini execution complete' };
+            } else {
+                onProgress({ stage: 'error', message: 'Gemini finished with errors.' });
+                return { success: false, error: 'Process exited with non-zero code' };
+            }
+
+        } catch (err) {
+            console.error('Gemini error:', err);
+            onProgress({ stage: 'error', message: `Execution failed: ${err.message}` });
+            return { success: false, error: err.message };
         }
+    },
 
+    /**
+     * Commit and push current changes
+     */
+    commit_changes: async ({ owner, repo, message }, onProgress) => {
         onProgress({ stage: 'committing', message: 'Committing changes...' });
 
-        // Auto-commit and push
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const commitMessage = `[Remote Dev] ${prompt.substring(0, 50)}...\n\nTimestamp: ${timestamp}`;
+        const commitMessage = message || `[Remote Dev] Changes at ${timestamp}`;
 
         const commitResult = await gitManager.commitAndPush(
             owner, repo, commitMessage, config.githubToken
         );
 
         onProgress({ stage: 'done', message: 'Changes pushed successfully!' });
-
-        return {
-            success: true,
-            geminiOutput: execResult.output,
-            commit: commitResult
-        };
+        return commitResult;
     },
 
     /**
@@ -145,10 +170,11 @@ const wsHandlers = {
     },
 
     /**
-     * Cancel current Gemini execution
+     * Cancel current Gemini session for a repo
      */
-    cancel: async () => {
-        const cancelled = geminiRunner.cancel();
+    cancel: async ({ owner, repo }) => {
+        const repoPath = gitManager.getRepoPath(owner, repo);
+        const cancelled = geminiRunner.cancel(repoPath);
         return { cancelled };
     }
 };

@@ -1,106 +1,102 @@
 import { spawn } from 'child_process';
-import path from 'path';
+import { EventEmitter } from 'events';
 
-/**
- * Gemini CLI wrapper for executing AI-powered code changes
- */
-export class GeminiRunner {
+export class GeminiRunner extends EventEmitter {
     constructor() {
+        super();
         this.activeProcess = null;
     }
 
-    /**
-     * Execute a Gemini CLI command in a repository
-     * @param {string} repoPath - Path to the repository
-     * @param {string} prompt - The instruction/prompt for Gemini
-     * @param {function} onOutput - Callback for streaming output
-     * @returns {Promise<{success: boolean, output: string}>}
-     */
     async execute(repoPath, prompt, onOutput = () => { }) {
+        console.log(`\n\n════════════════════════════════════════════════════════════`);
+        console.log(`🤖 GEMINI CLI EXECUTION (DIRECT MODE)`);
+        console.log(`📂 Repo:   ${repoPath}`);
+        console.log(`📝 Prompt: ${prompt}`);
+        console.log(`════════════════════════════════════════════════════════════\n`);
+
         return new Promise((resolve, reject) => {
-            // Use gemini CLI - adjust command based on your installation
-            // Common commands: 'gemini', 'gemini-cli', or full path
-            const geminiCmd = process.platform === 'win32' ? 'gemini.cmd' : 'gemini';
-
             let fullOutput = '';
-            let errorOutput = '';
 
-            // Spawn Gemini CLI process
-            this.activeProcess = spawn(geminiCmd, [prompt], {
+            // DIRECT EXECUTION: gemini "prompt"
+            // We removed -p based on the user's CLI help output indicating it's deprecated/conflicting
+            const isWindows = process.platform === 'win32';
+
+            // On Windows, use shell: true to find 'gemini' in PATH, but pass args as array
+            const safePrompt = String(prompt);
+
+            const proc = spawn('gemini', [safePrompt], {
                 cwd: repoPath,
-                shell: true,
-                env: {
-                    ...process.env,
-                    // Ensure non-interactive mode if supported
-                    CI: 'true'
-                }
+                shell: true, // Required on Windows to find executable in PATH
+                env: { ...process.env },
+                stdio: ['ignore', 'pipe', 'pipe']
             });
 
-            this.activeProcess.stdout.on('data', (data) => {
+            this.activeProcess = proc;
+
+            proc.stdout.on('data', (data) => {
                 const text = data.toString();
                 fullOutput += text;
+                process.stdout.write(text); // Mirror to server terminal
                 onOutput({ type: 'stdout', text });
             });
 
-            this.activeProcess.stderr.on('data', (data) => {
+            proc.stderr.on('data', (data) => {
                 const text = data.toString();
-                errorOutput += text;
+                // Filter "Loaded cached credentials"
+                if (!text.includes('Loaded cached credentials')) {
+                    process.stderr.write(text);
+                }
                 onOutput({ type: 'stderr', text });
             });
 
-            this.activeProcess.on('close', (code) => {
+            proc.on('close', (code) => {
+                console.log(`\n✅ Gemini finished (Code: ${code})`);
                 this.activeProcess = null;
-
-                if (code === 0) {
-                    resolve({
-                        success: true,
-                        output: fullOutput,
-                        exitCode: code
-                    });
-                } else {
-                    resolve({
-                        success: false,
-                        output: fullOutput,
-                        error: errorOutput,
-                        exitCode: code
-                    });
-                }
+                resolve({
+                    success: code === 0,
+                    output: fullOutput,
+                    exitCode: code
+                });
             });
 
-            this.activeProcess.on('error', (err) => {
+            proc.on('error', (err) => {
+                console.error('❌ Failed to start process:', err);
                 this.activeProcess = null;
-                reject(new Error(`Failed to start Gemini CLI: ${err.message}`));
+                reject(err);
             });
         });
     }
 
-    /**
-     * Cancel the currently running Gemini process
-     */
-    cancel() {
+    // Required for index.js compatibility
+    async startSession(repoPath, onOutput = () => { }) {
+        console.log(`\n📂 Active Repository switched to: ${repoPath}`);
+        onOutput({ type: 'info', text: `Ready for prompts in ${repoPath}` });
+        return { ready: true };
+    }
+
+    async sendPrompt(repoPath, prompt, onOutput = () => { }) {
+        return this.execute(repoPath, prompt, onOutput);
+    }
+
+    cancel(repoPath) {
         if (this.activeProcess) {
-            this.activeProcess.kill('SIGTERM');
+            console.log('🛑 Cancel requested. Killing process.');
+            this.activeProcess.kill();
             this.activeProcess = null;
             return true;
         }
         return false;
     }
 
-    /**
-     * Check if Gemini CLI is available
-     */
     async isAvailable() {
         return new Promise((resolve) => {
-            const geminiCmd = process.platform === 'win32' ? 'gemini.cmd' : 'gemini';
-            const proc = spawn(geminiCmd, ['--version'], { shell: true });
-
-            proc.on('close', (code) => {
-                resolve(code === 0);
-            });
-
-            proc.on('error', () => {
+            const proc = spawn('gemini', ['--version'], { shell: true, stdio: 'ignore' });
+            proc.on('close', (code) => resolve(code === 0));
+            proc.on('error', () => resolve(false));
+            setTimeout(() => {
+                if (proc && !proc.killed) proc.kill();
                 resolve(false);
-            });
+            }, 2000);
         });
     }
 }

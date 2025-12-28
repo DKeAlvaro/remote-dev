@@ -74,21 +74,53 @@ function RepoDetail({ token, user, serverUrl, serverSecret }) {
 
     const handleExecute = async (e) => {
         e.preventDefault();
-        if (!command.trim() || executing) return;
+        console.log('Execute clicked!', { command, executing, isAuthenticated: ws.isAuthenticated });
+
+        if (!command.trim() || executing) {
+            console.log('Blocked:', { hasCommand: !!command.trim(), executing });
+            return;
+        }
 
         setExecuting(true);
         setOutput([]);
-        setStatus('Starting...');
+        setStatus('Running Gemini CLI...');
+        const currentCommand = command;
+        setCommand('');
 
         try {
+            console.log('Sending execute_command...', { owner, repo, prompt: currentCommand });
             const result = await ws.request('execute_command', {
                 owner,
                 repo,
-                prompt: command
+                prompt: currentCommand
             });
+            console.log('Result:', result);
 
             if (result.success) {
-                setStatus('Changes pushed successfully!');
+                setStatus('Done! Click Push to commit changes.');
+            } else {
+                setStatus(`Error: ${result.error || 'Unknown error'}`);
+            }
+        } catch (err) {
+            console.error('Execute error:', err);
+            setStatus(`Error: ${err.message}`);
+        } finally {
+            setExecuting(false);
+        }
+    };
+
+    const handleStop = () => {
+        ws.send('cancel', { owner, repo });
+        setStatus('Cancelled');
+        setExecuting(false);
+    };
+
+    const handleCommit = async () => {
+        setStatus('Committing and pushing...');
+        try {
+            const result = await ws.request('commit_changes', { owner, repo });
+            if (result.committed) {
+                setStatus(`Pushed! Commit: ${result.hash?.substring(0, 7) || 'done'}`);
                 // Refresh commits
                 const newCommits = await getRepoCommits(token, owner, repo);
                 setCommits(newCommits.map(c => ({
@@ -98,16 +130,14 @@ function RepoDetail({ token, user, serverUrl, serverSecret }) {
                     date: c.commit.author.date,
                     author: c.commit.author.name
                 })));
-                setCommand('');
             } else {
-                setStatus(`Error: ${result.error}`);
+                setStatus(result.message || 'No changes to commit');
             }
         } catch (err) {
-            setStatus(`Error: ${err.message}`);
-        } finally {
-            setExecuting(false);
+            setStatus(`Commit failed: ${err.message}`);
         }
     };
+
 
     const handleRollback = async (commitHash) => {
         if (!confirm(`Are you sure you want to rollback to ${commitHash.substring(0, 7)}? This will force-push and rewrite history.`)) {
@@ -276,28 +306,49 @@ function RepoDetail({ token, user, serverUrl, serverSecret }) {
                     <input
                         type="text"
                         className="input"
-                        placeholder="Describe the changes you want to make..."
+                        placeholder="Be specific: 'Add a dark mode toggle button to the header'"
                         value={command}
                         onChange={(e) => setCommand(e.target.value)}
-                        disabled={executing || !ws.isAuthenticated}
+                        disabled={!ws.isAuthenticated}
                     />
-                    <button
-                        type="submit"
-                        className="btn btn-primary"
-                        disabled={executing || !command.trim() || !ws.isAuthenticated}
-                    >
-                        {executing ? (
-                            <div className="spinner"></div>
-                        ) : (
-                            <>
+                    {executing ? (
+                        <button
+                            type="button"
+                            className="btn btn-danger"
+                            onClick={handleStop}
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                            </svg>
+                            Stop
+                        </button>
+                    ) : (
+                        <>
+                            <button
+                                type="submit"
+                                className="btn btn-primary"
+                                disabled={!command.trim() || !ws.isAuthenticated}
+                            >
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                     <path d="M22 2L11 13" />
                                     <path d="M22 2L15 22L11 13L2 9L22 2Z" />
                                 </svg>
-                                Execute
-                            </>
-                        )}
-                    </button>
+                                Send
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={handleCommit}
+                                disabled={!ws.isAuthenticated}
+                                title="Commit and push all changes"
+                            >
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <path d="M12 19V5M5 12l7-7 7 7" />
+                                </svg>
+                                Push
+                            </button>
+                        </>
+                    )}
                 </form>
                 {!ws.isAuthenticated && (
                     <p style={{ marginTop: '8px', fontSize: '12px', color: 'var(--color-warning)' }}>

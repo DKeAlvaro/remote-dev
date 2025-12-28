@@ -22,11 +22,18 @@ export class TunnelManager {
 
         try {
             // Configure ngrok with auth token
-            this.tunnel = await ngrok.connect({
+            const options = {
                 addr: port,
                 authtoken: this.authToken,
                 proto: 'http'
-            });
+            };
+
+            // Use static domain if provided
+            if (process.env.NGROK_DOMAIN) {
+                options.domain = process.env.NGROK_DOMAIN;
+            }
+
+            this.tunnel = await ngrok.connect(options);
 
             this.publicUrl = this.tunnel.url();
             console.log(`\n🌐 Tunnel established!`);

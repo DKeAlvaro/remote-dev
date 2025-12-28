@@ -11,17 +11,30 @@ export function useWebSocket(serverUrl, sharedSecret) {
 
     const wsRef = useRef(null);
     const messageHandlersRef = useRef(new Map());
+    const reconnectTimeoutRef = useRef(null);
+    const serverUrlRef = useRef(serverUrl);
+    const secretRef = useRef(sharedSecret);
+
+    // Keep refs up to date
+    useEffect(() => {
+        serverUrlRef.current = serverUrl;
+        secretRef.current = sharedSecret;
+    }, [serverUrl, sharedSecret]);
 
     // Connect to WebSocket server
     const connect = useCallback(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
+        // Don't connect if already connected or connecting
+        if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+            console.log('WebSocket already connected/connecting');
             return;
         }
 
         try {
             // Convert HTTP URL to WebSocket URL
-            const wsUrl = serverUrl.replace(/^http/, 'ws');
+            const wsUrl = serverUrlRef.current.replace(/^http/, 'ws');
+            console.log('Connecting to WebSocket:', wsUrl);
             const ws = new WebSocket(wsUrl);
+            wsRef.current = ws;
 
             ws.onopen = () => {
                 console.log('WebSocket connected');
@@ -31,7 +44,7 @@ export function useWebSocket(serverUrl, sharedSecret) {
                 // Authenticate immediately
                 ws.send(JSON.stringify({
                     type: 'auth',
-                    payload: { secret: sharedSecret }
+                    payload: { secret: secretRef.current }
                 }));
             };
 
@@ -42,6 +55,7 @@ export function useWebSocket(serverUrl, sharedSecret) {
 
                     // Handle authentication response
                     if (message.type === 'auth_success') {
+                        console.log('WebSocket authenticated');
                         setIsAuthenticated(true);
                     } else if (message.type === 'auth_failed') {
                         setError('Authentication failed. Check your shared secret.');
@@ -60,11 +74,19 @@ export function useWebSocket(serverUrl, sharedSecret) {
                 }
             };
 
-            ws.onclose = () => {
-                console.log('WebSocket disconnected');
+            ws.onclose = (event) => {
+                console.log('WebSocket disconnected', event.code, event.reason);
                 setIsConnected(false);
                 setIsAuthenticated(false);
                 wsRef.current = null;
+
+                // Reconnect after 2 seconds if not a clean close
+                if (event.code !== 1000) {
+                    console.log('Will reconnect in 2 seconds...');
+                    reconnectTimeoutRef.current = setTimeout(() => {
+                        connect();
+                    }, 2000);
+                }
             };
 
             ws.onerror = (event) => {
@@ -72,16 +94,20 @@ export function useWebSocket(serverUrl, sharedSecret) {
                 setError('Connection failed. Make sure the laptop server is running.');
             };
 
-            wsRef.current = ws;
         } catch (e) {
+            console.error('Failed to create WebSocket:', e);
             setError(`Failed to connect: ${e.message}`);
         }
-    }, [serverUrl, sharedSecret]);
+    }, []);
 
     // Disconnect
     const disconnect = useCallback(() => {
+        if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+        }
         if (wsRef.current) {
-            wsRef.current.close();
+            wsRef.current.close(1000, 'User disconnect');
             wsRef.current = null;
         }
     }, []);
@@ -89,9 +115,11 @@ export function useWebSocket(serverUrl, sharedSecret) {
     // Send a message
     const send = useCallback((type, payload) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
+            console.log('Sending:', type, payload);
             wsRef.current.send(JSON.stringify({ type, payload }));
             return true;
         }
+        console.log('Cannot send, WebSocket not open. State:', wsRef.current?.readyState);
         return false;
     }, []);
 
@@ -118,7 +146,7 @@ export function useWebSocket(serverUrl, sharedSecret) {
             const responseType = `${type}_result`;
             const timeoutId = setTimeout(() => {
                 reject(new Error('Request timeout'));
-            }, 60000);
+            }, 120000); // 2 minute timeout
 
             const unsubscribe = onMessage(responseType, (result) => {
                 clearTimeout(timeoutId);
@@ -143,13 +171,6 @@ export function useWebSocket(serverUrl, sharedSecret) {
             }
         });
     }, [send, onMessage]);
-
-    // Cleanup on unmount
-    useEffect(() => {
-        return () => {
-            disconnect();
-        };
-    }, [disconnect]);
 
     return {
         isConnected,
